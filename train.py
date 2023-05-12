@@ -70,12 +70,18 @@ if __name__ == '__main__':
     if torch.cuda.is_available() and not arguments['--gpu']:
             print("WARNING: You have a CUDA device, so you should probably run with --gpu")
     if torch.backends.mps.is_available() and not arguments['--mps']: # type: ignore
-            print("WARNING: You have a MPS device, so you should probably run with --gpu")
+            print("WARNING: You have a MPS device, so you should probably run with --mps")
+
+    device = 'cpu'
 
     # Set GPU device and backend
     if arguments['--gpu']:
         torch.backends.cudnn.benchmark = True # type: ignore
         torch.cuda.set_device(int(arguments['--gpudev']))
+        device = 'cuda'
+
+    if arguments['--mps']:
+        device = 'mps'
 
     # Set detect anomaly
     torch.autograd.set_detect_anomaly(True) # type: ignore
@@ -89,7 +95,6 @@ if __name__ == '__main__':
         output_dr = os.getcwd() + '/output'
     else :
         output_dr = arguments['--o']
-
 
     # load the dataset
     if arguments['--inputrep']=="pianoroll":
@@ -151,11 +156,20 @@ if __name__ == '__main__':
         seq_length = 32
 
     # Instanciate model
-    encoder = m.Encoder_RNN(input_dim, enc_hidden_size, latent_size, num_layers_enc)
+    encoder = m.Encoder_RNN(input_dim, enc_hidden_size, latent_size, num_layers_enc, device=device)
     decoder = m.Decoder_RNN_hierarchical(output_dim, latent_size, cond_hidden_size, # type: ignore
                                         cond_outdim,dec_hidden_size, num_layers_dec,
                                         num_subsequences, seq_length) # type: ignore
-    model = m.VAE(encoder, decoder, arguments['--inputrep'])
+    model = m.VAE(encoder, decoder, arguments['--inputrep'], device=device)
+
+    #### Retrieve saved model ####
+    import glob
+    possible_models = glob.glob(f"{output_dr}/models/{arguments['--runname']}*.pth")
+    start_epoch = 0
+    if len(possible_models) > 0:
+        weights = sorted(possible_models, reverse=True)[0]
+        start_epoch = weights.split('_')[-1][:-4]
+        model.load_state_dict(torch.load(weights))
 
     # Loss
     if arguments['--inputrep'] in ['pianoroll', 'signallike']:
@@ -163,13 +177,8 @@ if __name__ == '__main__':
     else :
         loss_fn = torch.nn.CrossEntropyLoss(reduction='sum')
 
-    # Move to GPU
-    if arguments['--gpu']:
-        loss_fn = loss_fn.cuda()
-        model = model.cuda()
-    if arguments['--mps']:
-        loss_fn = loss_fn.to(device='mps') # type: ignore
-        model = model.to(device='mps') # type: ignore
+    loss_fn = loss_fn.to(device=device) # type: ignore
+    model = model.to(device=device) # type: ignore
 
     # Optimizer
     optimizer = torch.optim.Adam(model.parameters(), lr=float(arguments['--lr']))
@@ -178,29 +187,22 @@ if __name__ == '__main__':
     loss_test_min_reconst = 10e6
     w_kl = 0
 
-    for epoch in range(int(arguments['--maxiter'])):
+    for epoch in range(int(start_epoch), int(arguments['--maxiter'])):
         print('epoch : ' + str(epoch))
+
         #### Train ####
         loss_mean = 0
         kl_div_mean = 0
         reconst_loss_mean = 0
         nb_pass = 0
         model.train()
+
         for i, x in tqdm(enumerate(data_loader), total=len(dataset)//batch_size):
-            if arguments['--gpu']:
-                if arguments['--inputrep'] == "notetuple":
-                    x[0] = x[0].cuda()
-                    x[1] = x[1].cuda()
-                else :
-                    x = x.cuda()
-
-            if arguments['--mps']:
-                if arguments['--inputrep'] == "notetuple":
-                    x[0] = x[0].to(device='mps') # type: ignore
-                    x[1] = x[1].to(device='mps') # type: ignore
-                else :
-                    x = x.to(device='mps') # type: ignore
-
+            if arguments['--inputrep'] == "notetuple":
+                x[0] = x[0].to(device=device) # type: ignore
+                x[1] = x[1].to(device=device) # type: ignore
+            else :
+                x = x.to(device=device) # type: ignore
             # training pass
             loss, kl_div, reconst_loss = model.batch_pass(x, loss_fn, optimizer,
                                                         w_kl, dataset)
@@ -218,20 +220,14 @@ if __name__ == '__main__':
         reconst_loss_mean_TEST = 0
         nb_pass_TEST = 0
         model.eval()
+
         with torch.no_grad():
             for i, x in tqdm(enumerate(test_loader), total=len(testset)//batch_size):
-                if arguments['--gpu']:
-                    if arguments['--inputrep'] == "notetuple":
-                        x[0] = x[0].cuda()
-                        x[1] = x[1].cuda()
-                    else :
-                        x = x.cuda()
-                if arguments['--mps']:
-                    if arguments['--inputrep'] == "notetuple":
-                        x[0] = x[0].to(device='mps') # type: ignore
-                        x[1] = x[1].to(device='mps') # type: ignore
-                    else :
-                        x = x.to(device='mps') # type: ignore
+                if arguments['--inputrep'] == "notetuple":
+                    x[0] = x[0].to(device=device) # type: ignore
+                    x[1] = x[1].to(device=device) # type: ignore
+                else :
+                    x = x.to(device=device) # type: ignore
 
                 # testing pass
                 loss, kl_div, reconst_loss = model.batch_pass(x, loss_fn, optimizer,
@@ -256,14 +252,12 @@ if __name__ == '__main__':
 
         #### Save the model ####
         if arguments['--save']:
-            if epoch > 50 and loss_mean_TEST < loss_test_min_reconst:
+            if epoch > 0 and loss_mean_TEST < loss_test_min_reconst:
                 loss_test_min_reconst = loss_mean_TEST
                 torch.save(model.cpu().state_dict(),
                         output_dr + '/models/' + arguments['--runname'] + '_epoch_' + str(epoch+1) + '.pth')
-                if arguments['--gpu']:
-                    model = model.cuda()
-                if arguments['--mps']:
-                    model = model.to(device='mps') # type: ignore
+
+                model = model.to(device=device) # type: ignore
 
     # End of the script, close the writer
     writer.close()

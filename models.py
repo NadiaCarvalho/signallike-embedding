@@ -14,7 +14,7 @@ import random
 class Encoder_RNN(nn.Module):
 
     def __init__(self, input_dim, hidden_size, latent_size, num_layers,
-                 dropout=0.5, packed_seq=False):
+                 dropout=0.5, packed_seq=False, device='cpu'):
         """ This initializes the encoder """
         super(Encoder_RNN, self).__init__()
 
@@ -23,6 +23,7 @@ class Encoder_RNN(nn.Module):
         self.hidden_size = hidden_size
         self.latent_size = latent_size
         self.packed_seq = packed_seq
+        self.device = device
 
         # Layers
         self.RNN = nn.LSTM(input_dim, hidden_size, batch_first=True,
@@ -48,11 +49,9 @@ class Encoder_RNN(nn.Module):
         return h
 
     def init_hidden(self, batch_size=1):
-        device = torch.device(device='cuda' if torch.cuda.is_available(
-        ) else 'mps' if torch.backends.mps.is_available() else 'cpu')  # type: ignore
         # Bidirectional -> num_layers * 2
         return (torch.zeros(self.num_layers * 2, batch_size, self.hidden_size,
-                            dtype=torch.float, device=device),) * 2
+                            dtype=torch.float, device=self.device),) * 2
 
 
 class Decoder_RNN_hierarchical(nn.Module):
@@ -130,7 +129,7 @@ class Decoder_RNN_hierarchical(nn.Module):
 
 class VAE(nn.Module):
 
-    def __init__(self, encoder, decoder, input_representation, teacher_forcing=True):
+    def __init__(self, encoder, decoder, input_representation, teacher_forcing=True, device='cpu'):
         super(VAE, self).__init__()
         """ This initializes the complete VAE """
         # Parameters
@@ -138,8 +137,7 @@ class VAE(nn.Module):
         self.tf = teacher_forcing
         self.encoder = encoder
         self.decoder = decoder
-        self.device = torch.device(device='cuda' if torch.cuda.is_available(
-        ) else 'mps' if torch.backends.mps.is_available() else 'cpu')  # type: ignore
+        self.device = device
 
         # Layers
         self.hidden_to_mu = nn.Linear(

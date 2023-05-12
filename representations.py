@@ -6,7 +6,7 @@ Created on Tue Aug 25 16:28:14 2020
 @author: prang
 """
 
-import torch
+import torch # type: ignore
 import pretty_midi
 import os
 import numpy as np
@@ -41,7 +41,7 @@ PRIMES = [43, 47, 53, 59, 61, 67, 71, 73, 79, 83, 89, 97, 101, 103, 107,
           1811, 1823, 1831, 1847, 1861, 1867, 1871, 1877, 1889, 1901, 1907,
           1913, 1931, 1949, 1973, 1979, 1987, 1993, 1997, 2003, 2011, 2017,
           2027, 2039, 2053, 2063]
-                
+
 
 # Usefull functions
 def takeClosest(myList, myNumber):
@@ -65,7 +65,7 @@ def takeClosest(myList, myNumber):
 
 # Abstract class for the different input representations
 class Representation(ABC):
-    
+
     def __init__(self, root_dir, nbframe_per_bar=16, mono=False, export=False):
         """
         Args:
@@ -86,38 +86,38 @@ class Representation(ABC):
         self.mono = mono
         # number of tracks contained in the dataset
         self.nb_tracks = len(self.midfiles)
-    
-    
-    
+
+
+
     def __len__(self):
-        
-        return self.nb_bars
-   
-                      
-    
+
+        return self.nb_bars # type: ignore
+
+
+
     def __getitem__(self, index):
 
-        return torch.load(self.prbar_path + '/' + self.barfiles[index])
-    
-                    
-    @abstractmethod                                    
+        return torch.load(self.prbar_path + '/' + self.barfiles[index]) # type: ignore
+
+
+    @abstractmethod
     def per_bar_export(self):
         """
         This function take all the midi files, load them into a pretty_midi object.
         For a complete documentation of pretty_midi go to :
             http://craffel.github.io/pretty-midi/
-        
+
         The midi file is then processed to obtain the given representation of each bar with
         Finally, it will export each of theses bars in a separate .pt
         """
         pass
-    
-    
 
-################################# PIANO-ROLL #################################   
-        
+
+
+################################# PIANO-ROLL #################################
+
 class Pianoroll(Representation):
-    
+
     def __init__(self, root_dir, nbframe_per_bar=16, mono=False, export=False):
         super().__init__(root_dir, nbframe_per_bar=nbframe_per_bar, mono=mono, export=export)
         # Path witch contains the sliced piano-roll
@@ -126,11 +126,11 @@ class Pianoroll(Representation):
         else :
             self.prbar_path = root_dir + "/pianoroll_bar_" + str(self.nbframe_per_bar)
         if not os.path.exists(self.prbar_path):
-            try:  
+            try:
                 os.mkdir(self.prbar_path)
-            except OSError:  
+            except OSError:
                 print ("Creation of the directory %s failed" % self.prbar_path)
-            else:  
+            else:
                 print ("Successfully created the directory %s " % self.prbar_path)
             # Export the piano-roll bat
             self.per_bar_export()
@@ -141,11 +141,11 @@ class Pianoroll(Representation):
         self.barfiles = [fname for fname in os.listdir(self.prbar_path) if fname.endswith('.pt')]
         # total number of bars
         self.nb_bars = len(self.barfiles)
-        
-        
+
+
 
     def sliced_and_save_pianoroll(self, pianoroll, downbeats, fs, num_bar):
-        
+
         for i in range(len(downbeats)-1):
             sp = pianoroll[:,int(round(downbeats[i]*fs)):int(round(downbeats[i+1]*fs))-1]
             if sp.shape[1] > 256:
@@ -163,9 +163,9 @@ class Pianoroll(Representation):
                 # Save the tensor
                 torch.save(sp.permute(1,0), self.prbar_path + "/prbar" + str(num_bar) +  ".pt")
                 num_bar += 1
-        
+
         return num_bar
-    
+
 
 
     def per_bar_export(self):
@@ -185,19 +185,19 @@ class Pianoroll(Representation):
                             pianoroll = inst.get_piano_roll(fs=fs)
                             num_bar = self.sliced_and_save_pianoroll(pianoroll, downbeats, fs, num_bar)
                 else :
-                    pianoroll = midi_data.get_piano_roll(fs=fs)
+                    pianoroll = midi_data.get_piano_roll(fs=fs) # type: ignore
                     num_bar = self.sliced_and_save_pianoroll(pianoroll, downbeats, fs, num_bar)
             except KeyError:
                 num_error += 1
         print("total number of file : ", len(self.midfiles))
         print('num error : ', num_error)
-        
-        
 
-################################# MIDI-like ################################## 
+
+
+################################# MIDI-like ##################################
 
 class Midilike(Representation):
-    
+
     def __init__(self, root_dir, nbframe_per_bar=16, mono=False, export=False):
         super().__init__(root_dir, nbframe_per_bar=nbframe_per_bar, mono=mono, export=export)
         # One hot encoding of the vocabulary
@@ -205,11 +205,11 @@ class Midilike(Representation):
         # Path witch contains the sliced piano-roll
         self.prbar_path = root_dir + "/MIDIlike_bar"
         if not os.path.exists(self.prbar_path):
-            try:  
+            try:
                 os.mkdir(self.prbar_path)
-            except OSError:  
+            except OSError:
                 print ("Creation of the directory %s failed" % self.prbar_path)
-            else:  
+            else:
                 print ("Successfully created the directory %s " % self.prbar_path)
             # Export the piano-roll bat
             self.per_bar_export()
@@ -220,14 +220,14 @@ class Midilike(Representation):
         self.barfiles = [fname for fname in os.listdir(self.prbar_path) if fname.endswith('.pt')]
         # total number of bars
         self.nb_bars = len(self.barfiles)
-             
-        
-                
+
+
+
     def get_vocab_encoding(self):
         """
         Return a dictionnary with the corresponding indexes of every word contained in
         the vocabulary (one hot encoding).
-        
+
         e.g : vocab = {'NOTE_ON<1>' : 0
                        'NOTE_ON<2>' : 1
                            ...
@@ -236,7 +236,7 @@ class Midilike(Representation):
         """
         vocab = {}
         current_ind = 0
-        
+
         # All the NOTE_ON events
         rootstr = "NOTE_ON<"
         for i in range(0, 128):
@@ -263,41 +263,41 @@ class Midilike(Representation):
             current_ind += 1
         # The NOTHING event
         vocab['NOTHING'] = current_ind
-        
+
         return vocab
-    
-    
-    
+
+
+
     def string_representation(self, Vinst):
         """
-        Return the representation with string ("NOTE_ON<56>, ...) from the 
+        Return the representation with string ("NOTE_ON<56>, ...) from the
         corresponding integer representation Vinst (list of int)
         """
         str_rep = []
         for i in Vinst:
             str_rep.append(list(self.vocabulary.keys())[list(self.vocabulary.values()).index(int(i))])
-        
+
         return str_rep
-    
-    
-    
+
+
+
     def per_bar_export(self):
         """
         This function take all the midi files, load them into a pretty_midi object.
         For a complete documentation of pretty_midi go to :
             http://craffel.github.io/pretty-midi/
-        
+
         The midi file is then processed to obtain a MIDI-like event-based representation.
-        More info on this representation here : 
+        More info on this representation here :
             https://arxiv.org/pdf/1809.04281.pdf
-        
+
         Ex :  SET_VELOCITY<80>, NOTE_ON<60>
               TIME_SHIFT<500>, NOTE_ON<64>
               TIME_SHIFT<500>, NOTE_ON<67>
               TIME_SHIFT<1000>, NOTE_OFF<60>, NOTE_OFF<64>, NOTE_OFF<67>
               TIME_SHIFT<500>, SET_VELOCITY<100>, NOTE_ON<65>
               TIME_SHIFT<500>, NOTE_OFF<65>
-              
+
         Finally, it will export each of theses bars in a separate .pt
         """
         # number of error with the key analyzer
@@ -328,7 +328,7 @@ class Midilike(Representation):
                         gap = (downbeats[i+1] - downbeats[i])*1000
                         while(gap > 1000):
                             V.append(self.vocabulary['TIME_SHIFT<1000>'])
-                            gap = gap - 1000    
+                            gap = gap - 1000
                         timeshift = takeClosest(timeshift_list, gap)
                         V.append(self.vocabulary['TIME_SHIFT<' + str(timeshift) + '>'])
                     else:
@@ -342,7 +342,7 @@ class Midilike(Representation):
                                 if gap > timeshift_list[0]/2:
                                     while(gap > 1000):
                                         V.append(self.vocabulary['TIME_SHIFT<1000>'])
-                                        gap = gap - 1000    
+                                        gap = gap - 1000
                                     timeshift = takeClosest(timeshift_list, gap)
                                     V.append(self.vocabulary['TIME_SHIFT<' + str(timeshift) + '>'])
                                 if takeClosest(velocity_list, closest_note_on.velocity) != current_velocity:
@@ -355,7 +355,7 @@ class Midilike(Representation):
                                 if closest_note_on.end > downbeats[i+1]:
                                     list_notes.remove(closest_note_on)
                                 else :
-                                    # Set a value > end to start to not taking it in account anymore 
+                                    # Set a value > end to start to not taking it in account anymore
                                     closest_note_on.start = closest_note_on.end + 10
                             else :
                                 gap = (closest_note_off.end - current_time)*1000
@@ -397,24 +397,24 @@ class Midilike(Representation):
         print("Initial number of bar : {}\n \
                After cleaning : {}\n \
                Number of suppression : {}".format(len(all_bars), total_num, len(all_bars) - total_num))
-        
-        
 
 
-############################### MIDI-like mono ############################### 
-        
+
+
+############################### MIDI-like mono ###############################
+
 class Midimono(Representation):
-    
+
     def __init__(self, root_dir, nbframe_per_bar=16, mono=True, export=False):
         super().__init__(root_dir, nbframe_per_bar=nbframe_per_bar, mono=mono, export=export)
         # Path witch contains the sliced piano-roll
         self.prbar_path = root_dir + "/MIDIMono_bar"
         if not os.path.exists(self.prbar_path):
-            try:  
+            try:
                 os.mkdir(self.prbar_path)
-            except OSError:  
+            except OSError:
                 print ("Creation of the directory %s failed" % self.prbar_path)
-            else:  
+            else:
                 print ("Successfully created the directory %s " % self.prbar_path)
             # Export the piano-roll bat
             self.per_bar_export()
@@ -425,23 +425,23 @@ class Midimono(Representation):
         self.barfiles = [fname for fname in os.listdir(self.prbar_path) if fname.endswith('.pt')]
         # total number of bars
         self.nb_bars = len(self.barfiles)
-        
-    
-    
+
+
+
     def get_polyphonic_bars(self, pr_dataset):
-        
+
         indices = set()
         for i in range(len(pr_dataset)):
             for j,frame in enumerate(pr_dataset[i]):
                 if frame.nonzero().nelement() > 1:
                     indices.add(i)
-                    
+
         return indices
-    
-                
-    
+
+
+
     def to_pianoroll(self, v):
-        
+
         pianoroll = torch.zeros(16, 128)
         current_note = -1
         for i,e in enumerate(v):
@@ -451,13 +451,13 @@ class Midimono(Representation):
             elif e == 128:
                 if current_note != 129:
                     pianoroll[i, current_note] = 1
-                    
+
         return pianoroll
-        
-    
-    
+
+
+
     def per_bar_export(self):
-        
+
         PR = Pianoroll(self.rootdir, nbframe_per_bar=16, mono=True)
         poly_bars = self.get_polyphonic_bars(PR)
         num_vec = 0
@@ -487,13 +487,13 @@ class Midimono(Representation):
                 # Save the tensor
                 torch.save(vec.unsqueeze(1), self.prbar_path + "/MVAEbar_" + str(num_vec) + ".pt")
                 num_vec += 1
-                
-                
 
-################################# NoteTuple ##################################                
- 
+
+
+################################# NoteTuple ##################################
+
 class Notetuple(Representation):
-    
+
     def __init__(self, root_dir, nbframe_per_bar=16, mono=False, export=False):
         super().__init__(root_dir, nbframe_per_bar=nbframe_per_bar, mono=mono, export=export)
         # vocabs
@@ -505,11 +505,11 @@ class Notetuple(Representation):
         # Path witch contains the sliced piano-roll
         self.prbar_path = root_dir + "/NoteTuple_bar"
         if not os.path.exists(self.prbar_path):
-            try:  
+            try:
                 os.mkdir(self.prbar_path)
-            except OSError:  
+            except OSError:
                 print ("Creation of the directory %s failed" % self.prbar_path)
-            else:  
+            else:
                 print ("Successfully created the directory %s " % self.prbar_path)
             # Export the bar
             self.per_bar_export()
@@ -520,9 +520,9 @@ class Notetuple(Representation):
         self.barfiles = [fname for fname in os.listdir(self.prbar_path) if fname.endswith('.pt')]
         # total number of bars
         self.nb_bars = len(self.barfiles)
-        
-        
-        
+
+
+
     def get_vocabs_encoding(self):
         # timeshift major_ticks_vocab
         ts_major = {}
@@ -553,9 +553,9 @@ class Notetuple(Representation):
             ind += 1
         dur_minor[-1] = ind
         return ts_major, ts_minor, dur_major, dur_minor
-        
-    
-    
+
+
+
     def value_to_class(self, bar):
         # Change the value of the timeshift and duration to a class number
         for i,tupl in enumerate(bar):
@@ -566,15 +566,15 @@ class Notetuple(Representation):
                     bar[i][j] = self.ts_minor[int(v)]
                 if j == 2:
                     if v == -1:
-                       bar[i][j] = 128 
+                       bar[i][j] = 128
                 if j == 3:
                     bar[i][j] = self.dur_major[int(v)]
                 if j == 4:
                     bar[i][j] = self.dur_minor[int(v)]
         return bar
-    
-    
-    
+
+
+
     def class_to_value(self, bar):
         # Change the class number of the timeshift and duration to the real value
         for i,tupl in enumerate(bar):
@@ -590,14 +590,14 @@ class Notetuple(Representation):
                     bar[i][j] = list(self.dur_major.keys())[list(self.dur_major.values()).index(int(v))]
                 if j == 4:
                     bar[i][j] = list(self.dur_minor.keys())[list(self.dur_minor.values()).index(int(v))]
-        return bar                
-        
-    
-    
+        return bar
+
+
+
     def per_bar_export(self):
         num_error = 0
         # to store all the bars
-        all_bars = [] 
+        all_bars = []
         for index in range(len(self.midfiles)):
             try:
                 # load each .mid file in a pretty_midi object
@@ -639,7 +639,7 @@ class Notetuple(Representation):
                     all_bars.append(torch.tensor(V))
             except KeyError:
                 num_error += 1
-        print('num error : ', num_error)   
+        print('num error : ', num_error)
         # Save all tensor
         total_num = 0
         for i, vec in enumerate(all_bars):
@@ -655,15 +655,15 @@ class Notetuple(Representation):
                 total_num += 1
         print("Initial number of bar : {}\n \
                After cleaning : {}\n \
-               Number of suppression : {}".format(len(all_bars), total_num, len(all_bars) - total_num)) 
+               Number of suppression : {}".format(len(all_bars), total_num, len(all_bars) - total_num))
 
 
 
 
 ################################# Signal-like ################################
-               
+
 class Signallike(Representation):
-    
+
     def __init__(self, root_dir, nbframe_per_bar=16, mono=False, export=False):
         super().__init__(root_dir, nbframe_per_bar=nbframe_per_bar, mono=mono, export=export)
         # Path to export the .pt files
@@ -672,11 +672,11 @@ class Signallike(Representation):
         else:
             self.prbar_path = root_dir + "/Signallike_bar_" + str(self.nbframe_per_bar)
         if not os.path.exists(self.prbar_path):
-            try:  
+            try:
                 os.mkdir(self.prbar_path)
-            except OSError:  
+            except OSError:
                 print ("Creation of the directory %s failed" % self.prbar_path)
-            else:  
+            else:
                 print ("Successfully created the directory %s " % self.prbar_path)
             # Export the piano-roll bat
             self.per_bar_export()
@@ -689,18 +689,18 @@ class Signallike(Representation):
         self.nb_bars = len(self.barfiles)
         # Size of the signal representation
         self.signal_size = len(self.__getitem__(0).flatten())
-        
-        
-    
+
+
+
     def back_to_pianoroll(self, V):
         """
         Inverse the process : get a piano-roll from a signal-like representation V.
         """
         PR = ((np.abs(librosa.core.stft(V , n_fft=2048, window='blackman'))))[PRIMES[:128]]
         return abs(PR)
-    
-    
-    
+
+
+
     def get_polyphonic_bars(self, pr_dataset):
         indices = set()
         for i in range(len(pr_dataset)):
@@ -708,15 +708,15 @@ class Signallike(Representation):
                 if frame.nonzero().nelement() > 1:
                     indices.add(i)
         return indices
-    
-    
-    
+
+
+
     def per_bar_export(self):
         """
         This function take the self.midfiles[index], load it into a pretty_midi object.
         For a complete documentation of pretty_midi go to :
-            http://craffel.github.io/pretty-midi/ 
-       
+            http://craffel.github.io/pretty-midi/
+
         The midi file is then processed with stft to obtain a signal-like representation
         and exported in a .pt file.
         """

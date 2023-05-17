@@ -121,8 +121,7 @@ if __name__ == '__main__':
         input_dim = dataset.signal_size//64
     elif arguments['--inputrep'] == "notetuple":
         dataset = rep_classes.Notetuple(train_path)
-        testset = rep_classes.NoteTupleRepresentation(
-            test_path)  # type: ignore
+        testset = rep_classes.Notetuple(test_path)
         input_dim = 5
     else:
         raise NotImplementedError(

@@ -1,7 +1,11 @@
 dataset
-output/runs/default_run
+original_output/*
+output/*
 
 __pycache__
 *.pyc
 *.pyo
 *.pyd
+
+.DS_Store
+*/.DS_Store

@@ -86,6 +86,11 @@ if __name__ == '__main__':
         dataset = rep_classes.Notetuple(train_path)
         testset = rep_classes.Notetuple(test_path)
         input_dim = 5
+    elif arguments['--inputrep'] == "dft128":
+        dataset = rep_classes.DFT128(train_path, nbframe_per_bar=nb_frame)
+        testset = rep_classes.DFT128(test_path, nbframe_per_bar=nb_frame)
+        input_dim = 130
+        seq_length = nb_frame
     else:
         raise NotImplementedError(
             "Representation {} not implemented".format(arguments['--inputrep']))
@@ -106,7 +111,7 @@ if __name__ == '__main__':
     num_subsequences = 4
     latent_size = 256
 
-    if arguments['--inputrep'] in ['pianoroll', 'signallike']:
+    if arguments['--inputrep'] in ['pianoroll', 'signallike', 'dft128']:
         output_dim = input_dim
     elif arguments['--inputrep'] == "midilike":
         output_dim = len(dataset.vocabulary)  # type: ignore

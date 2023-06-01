@@ -162,7 +162,7 @@ class Pianoroll(Representation):
     def sliced_and_save_pianoroll(self, pianoroll, downbeats, fs, num_bar):
 
         for i in range(len(downbeats)-1):
-            sp = pianoroll[:, int(round(downbeats[i]*fs)):int(round(downbeats[i+1]*fs))-1]
+            sp = pianoroll[:, int(round(downbeats[i]*fs))                           :int(round(downbeats[i+1]*fs))-1]
             if sp.shape[1] > 256:
                 sp = sp[:, 0:256]
             elif sp.shape[1] < 256 and sp.shape[1] > 0:
@@ -239,7 +239,7 @@ class Midilike(Representation):
                 self.per_bar_export()
         # .pt files names
         self.barfiles = [fname for fname in os.listdir(
-            self.prbar_path) if fname.endswith('.pt')]
+            self.prbar_path) if fname.endswith('.pbz2')]
         # total number of bars
         self.nb_bars = len(self.barfiles)
 
@@ -466,7 +466,7 @@ class Midimono(Representation):
                 self.per_bar_export()
         # .pt files names
         self.barfiles = [fname for fname in os.listdir(
-            self.prbar_path) if fname.endswith('.pt')]
+            self.prbar_path) if fname.endswith('.pbz2')]
         # total number of bars
         self.nb_bars = len(self.barfiles)
 
@@ -559,7 +559,7 @@ class Notetuple(Representation):
                 self.per_bar_export()
         # .pt files names
         self.barfiles = [fname for fname in os.listdir(
-            self.prbar_path) if fname.endswith('.pt')]
+            self.prbar_path) if fname.endswith('.pbz2')]
         # total number of bars
         self.nb_bars = len(self.barfiles)
 
@@ -703,7 +703,8 @@ class Notetuple(Representation):
                 # torch.save((clean_vec, len(vec)), self.prbar_path +
                 #            "/Ntuplebar" + str(i) + ".pt")
                 with bz2.BZ2File(f"{self.prbar_path}/Ntuplebar{str(i)}.pbz2", "w") as filepath:
-                    cPickle.dump((clean_vec, len(vec)), filepath) # type: ignore
+                    cPickle.dump((clean_vec, len(vec)),  # type: ignore
+                                 filepath)
                 total_num += 1
         print("Initial number of bar : {}\n \
                After cleaning : {}\n \
@@ -738,7 +739,7 @@ class Signallike(Representation):
                 self.per_bar_export()
         # .pt files names
         self.barfiles = [fname for fname in os.listdir(
-            self.prbar_path) if fname.endswith('.pt')]
+            self.prbar_path) if fname.endswith('.pbz2')]
         # total number of bars
         self.nb_bars = len(self.barfiles)
         # Size of the signal representation
@@ -787,3 +788,94 @@ class Signallike(Representation):
                 #            "/Slikebar_" + str(i) + ".pt")
                 with bz2.BZ2File(f"{self.prbar_path}/Slikebar_{str(i)}.pbz2", "w") as filepath:
                     cPickle.dump(V.reshape(64, -1), filepath)
+
+################################# DFT-128 ################################
+
+
+def dft_reduction(data, normalize=False, return_complex=False, only_dft=False):
+    """GET DFT"""
+    dft = np.fft.fft(data)
+
+    if normalize:
+        # GET ENERGY
+        energy = dft[0].real
+        # REDUCE AND NORMALIZE DFT
+        reduced_dft = dft[1: int(len(dft) / 2.0) + 1]
+        norm_dft = [df / energy for df in reduced_dft]
+        # GET MAGNITUDE
+        mag = [abs(CP) for CP in norm_dft]
+    else:
+        norm_dft = dft
+        energy = dft[0].real
+        mag = [abs(CP) for CP in norm_dft]
+
+    if return_complex:
+        if only_dft:
+            return norm_dft
+        return norm_dft, energy, mag
+
+    real_dft = []
+    for complex_coefficient in norm_dft:
+        real_dft.append(complex_coefficient.real)
+        real_dft.append(complex_coefficient.imag)
+
+    if only_dft:
+        return real_dft
+    # RETURN
+    return real_dft, energy, mag
+
+
+class DFT128(Representation):
+    def __init__(self, root_dir, nbframe_per_bar=16, mono=False, export=False, use_symmetry=True):
+        super().__init__(root_dir, nbframe_per_bar=nbframe_per_bar, mono=mono, export=export)
+
+        self.prbar_path = root_dir + "/DFT128_bar" + str(self.nbframe_per_bar)
+        self.use_symmetry = use_symmetry
+
+        if not os.path.exists(self.prbar_path):
+            try:
+                os.mkdir(self.prbar_path)
+            except OSError:
+                print("Creation of the directory %s failed" % self.prbar_path)
+            else:
+                print("Successfully created the directory %s " %
+                      self.prbar_path)
+
+            # Export the piano-roll bat
+            self.per_bar_export()
+        elif export:
+            self.per_bar_export()
+
+        # .pt files names
+        self.barfiles = [fname for fname in os.listdir(
+            self.prbar_path) if fname.endswith('.pbz2')]
+        # total number of bars
+        self.nb_bars = len(self.barfiles)
+        # Size of the signal representation
+        self.signal_size = len(self.__getitem__(0).flatten())
+
+    def back_to_pianoroll(self, V):
+        """
+        Inverse the process : get a piano-roll from a DFT128 representation V.
+        """
+        return None
+
+    def per_bar_export(self):
+        """
+        This function take the self.midfiles[index], load it into a pretty_midi object.
+                For a complete documentation of pretty_midi go to :
+            http://craffel.github.io/pretty-midi/
+
+        The midi file is then processed with DFT encodings to obtain a DFT128 representation
+        """
+        PR = Pianoroll(
+            self.rootdir, nbframe_per_bar=self.nbframe_per_bar, mono=self.mono)
+        for i in range(len(PR)):
+            dft_results = np.apply_along_axis(
+                dft_reduction, 1, PR[i].numpy(), only_dft=True)
+            if self.use_symmetry:
+                dft_results = torch.Tensor(dft_results[:, :65*2])
+            else:
+                dft_results = torch.Tensor(dft_results)
+            with bz2.BZ2File(f"{self.prbar_path}/DFT128bar_{str(i)}.pbz2", "w") as filepath:
+                cPickle.dump(dft_results, filepath)

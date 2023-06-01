@@ -3,6 +3,7 @@ dataset.zip
 
 original_output/*
 output/*
+old/*
 
 __pycache__
 *.pyc

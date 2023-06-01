@@ -6,9 +6,13 @@ Created on Tue Aug 25 13:41:24 2020
 @author: prang
 """
 
-import torch  # type: ignore
-from torch import nn  # type: ignore
 import random
+from typing import Any
+
+import lightning as L
+import torch  # type: ignore
+from lightning.pytorch.utilities.types import STEP_OUTPUT
+from torch import nn  # type: ignore
 
 
 class Encoder_RNN(nn.Module):
@@ -23,10 +27,11 @@ class Encoder_RNN(nn.Module):
         self.hidden_size = hidden_size
         self.latent_size = latent_size
         self.packed_seq = packed_seq
+        self.batch_first = True
         self.device = device
 
         # Layers
-        self.RNN = nn.LSTM(input_dim, hidden_size, batch_first=True,
+        self.RNN = nn.LSTM(input_dim, hidden_size, batch_first=self.batch_first,
                            num_layers=num_layers, bidirectional=True,
                            dropout=dropout)
 
@@ -35,10 +40,11 @@ class Encoder_RNN(nn.Module):
         # Pack sequence if needed
         if self.packed_seq:
             x = torch.nn.utils.rnn.pack_padded_sequence(x[0], x[1],
-                                                        batch_first=True,
+                                                        batch_first=self.batch_first,
                                                         enforce_sorted=False)
         # Forward pass
         _, (h, _) = self.RNN(x, (h0, c0))
+
         # Be sure to not have NaN values
         assert ((h == h).all()), 'NaN value in the output of the RNN, try to \
                                 lower your learning rate'
@@ -132,11 +138,12 @@ class VAE(nn.Module):
     def __init__(self, encoder, decoder, input_representation, teacher_forcing=True, device='cpu'):
         super(VAE, self).__init__()
         """ This initializes the complete VAE """
+
         # Parameters
         self.input_rep = input_representation
         self.tf = teacher_forcing
-        self.encoder = encoder
-        self.decoder = decoder
+        self.encoder = nn.ModuleList(encoder)
+        self.decoder = nn.ModuleList(decoder)
         self.device = device
 
         # Layers
@@ -153,7 +160,7 @@ class VAE(nn.Module):
             batch_size = x.size(0)
 
         # Encoder pass
-        h_enc, c_enc = self.encoder.init_hidden(batch_size)
+        h_enc, c_enc = self.encoder.init_hidden(batch_size)  # type: ignore
         hidden = self.encoder(x, h_enc, c_enc, batch_size)
         # Reparametrization
         mu = self.hidden_to_mu(hidden)
@@ -174,7 +181,7 @@ class VAE(nn.Module):
 
         return mu, sig, latent, x_reconst
 
-    def batch_pass(self, x, loss_fn, optimizer, w_kl, dataset, test=False):
+    def batch_pass(self, x, loss_fn, optimizer, w_kl, test=False):
 
         # Zero grad
         self.zero_grad()
@@ -187,25 +194,34 @@ class VAE(nn.Module):
         if self.input_rep in ["midilike", "MVAErep"]:
             reconst_loss = loss_fn(x_reconst.permute(
                 0, 2, 1), x.squeeze(2).long())
-        elif self.input_rep in ["pianoroll", "signallike"]:
-            reconst_loss = loss_fn(x_reconst, x)
         elif self.input_rep == "notetuple":
             x_reconst = x_reconst.permute(0, 2, 1)
             x_in, l = x
             loss_ts_maj = loss_fn(
-                x_reconst[:, :len(dataset.vocabs[0]), :], x_in[:, :, 0].long())
-            current = len(dataset.vocabs[0])
+                x_reconst[:, :len(self.vocab[0]), :],  # type: ignore
+                x_in[:, :, 0].long())
+            current = len(self.vocab[0])  # type: ignore
+
             loss_ts_min = loss_fn(
-                x_reconst[:, current:current+len(dataset.vocabs[1]), :], x_in[:, :, 1].long())
-            current += len(dataset.vocabs[1])
+                x_reconst[:, current:current +
+                          len(self.vocab[1]), :],  # type: ignore
+                x_in[:, :, 1].long())
+            current += len(self.vocab[1])  # type: ignore
+
             loss_pitch = loss_fn(
                 x_reconst[:, current:current + 129, :], x_in[:, :, 2].long())
             current += 129
+
             loss_dur_maj = loss_fn(
-                x_reconst[:, current:current+len(dataset.vocabs[2]), :], x_in[:, :, 3].long())
-            current += len(dataset.vocabs[2])
+                x_reconst[:, current:current +
+                          len(self.vocab[2]), :],  # type: ignore
+                x_in[:, :, 3].long())
+            current += len(self.vocab[2])  # type: ignore
+
             loss_dur_min = loss_fn(
-                x_reconst[:, current:current+len(dataset.vocabs[3]), :], x_in[:, :, 4].long())
+                x_reconst[:, current:current +
+                          len(self.vocab[3]), :],  # type: ignore
+                x_in[:, :, 4].long())
             reconst_loss = loss_ts_maj + loss_ts_min + \
                 loss_pitch + loss_dur_maj + loss_dur_min
         else:
@@ -225,9 +241,182 @@ class VAE(nn.Module):
 
         # Create dumb target
         input_shape = (1, self.decoder.seq_length, self.decoder.input_size)
-        db_trg = torch.zeros(input_shape)
+        db_trg = torch.zeros(input_shape)  # type: ignore
         # Forward pass in the decoder
         generated_bar = self.decoder(latent.unsqueeze(0), db_trg, batch_size=1,
                                      device=self.device, teacher_forcing=False)
 
         return generated_bar
+
+
+class LightningVAE(L.LightningModule):
+
+    def __init__(self, encoder, decoder, input_representation, vocab=None, teacher_forcing=True):
+        super(LightningVAE, self).__init__()
+        """ This initializes the complete VAE """
+        # Parameters
+        self.input_rep = input_representation
+        self.tf = teacher_forcing
+        self.encoder = encoder
+        self.decoder = decoder
+
+        self.w_kl = 0
+
+        self.vocab = vocab
+        if input_representation == 'notetuple' and vocab is None:
+            raise ValueError(
+                'Vocab must be provided for notetuple input representation')
+
+        # Layers
+        self.hidden_to_mu = nn.Linear(
+            2 * encoder.hidden_size, encoder.latent_size)
+        self.hidden_to_sig = nn.Linear(
+            2 * encoder.hidden_size, encoder.latent_size)
+
+        if input_representation in ['pianoroll', 'signallike']:
+            self.loss_fn = torch.nn.MSELoss(reduction='sum')
+        else:
+            self.loss_fn = torch.nn.CrossEntropyLoss(reduction='sum')
+
+        self.save_hyperparameters(ignore=['encoder', 'decoder'])
+
+    def forward(self, x):
+
+        if self.input_rep == 'notetuple':
+            batch_size = x[0].size(0)
+        else:
+            batch_size = x.size(0)
+
+        # Encoder pass
+        h_enc, c_enc = self.encoder.init_hidden(batch_size)
+        hidden = self.encoder(x, h_enc, c_enc, batch_size)
+
+        # Reparametrization
+        mu = self.hidden_to_mu(hidden)
+        sig = self.hidden_to_sig(hidden)
+        eps = torch.randn_like(mu).detach().to(self.device)
+        latent = (sig.exp().sqrt() * eps) + mu
+
+        # Decoder pass
+        if self.input_rep == 'midilike':
+            # One hot encoding of the target for teacher forcing purpose
+            target = torch.nn.functional.one_hot(x.squeeze(2).long(),
+                                                 self.input_size).float()
+            x_reconst = self.decoder(latent, target, batch_size,
+                                     teacher_forcing=self.tf, device=self.device)
+        else:
+            x_reconst = self.decoder(latent, x, batch_size,
+                                     teacher_forcing=self.tf, device=self.device)
+
+        return mu, sig, latent, x_reconst
+
+    def notetuple_reconstruction_loss(self, x_reconst, x):
+        """Compute the reconstruction loss for a
+        given input in notetuple format and its reconstruction"""
+        x_reconst = x_reconst.permute(0, 2, 1)
+        x_in, l = x
+        loss_ts_maj = self.loss_fn(
+            x_reconst[:, :len(self.vocab[0]), :],  # type: ignore
+            x_in[:, :, 0].long())
+        current = len(self.vocab[0])  # type: ignore
+
+        loss_ts_min = self.loss_fn(
+            x_reconst[:, current:current +
+                      len(self.vocab[1]), :],  # type: ignore
+            x_in[:, :, 1].long())
+        current += len(self.vocab[1])  # type: ignore
+
+        loss_pitch = self.loss_fn(
+            x_reconst[:, current:current + 129, :],
+            x_in[:, :, 2].long())
+        current += 129
+
+        loss_dur_maj = self.loss_fn(
+            x_reconst[:, current:current +
+                      len(self.vocab[2]), :],  # type: ignore
+            x_in[:, :, 3].long())
+        current += len(self.vocab[2])  # type: ignore
+
+        loss_dur_min = self.loss_fn(
+            x_reconst[:, current:current +
+                      len(self.vocab[3]), :],  # type: ignore
+            x_in[:, :, 4].long())
+        reconst_loss = loss_ts_maj + loss_ts_min + \
+            loss_pitch + loss_dur_maj + loss_dur_min
+
+        return reconst_loss
+
+    def compute_reconstruction_loss(self, x, x_reconst):
+        """ Compute the reconstruction loss for a given input and its reconstruction """
+
+        if self.input_rep in ["midilike", "MVAErep"]:
+            reconst_loss = self.loss_fn(x_reconst.permute(
+                0, 2, 1), x.squeeze(2).long())
+        elif self.input_rep == "notetuple":
+            reconst_loss = self.notetuple_reconstruction_loss(x_reconst, x)
+        else:  # pianoroll, signallike
+            reconst_loss = self.loss_fn(x_reconst, x)
+
+        return reconst_loss
+
+    def training_step(self, batch, batch_idx):
+        x = batch
+
+        # Zero grad
+        self.zero_grad()
+
+        # Forward pass
+        mu, sig, _, x_reconst = self(x)
+
+        # Compute losses
+        kl_div = - 0.5 * torch.sum(1 + sig - mu.pow(2) - sig.exp())
+        reconst_loss = self.compute_reconstruction_loss(x, x_reconst)
+
+        # Backprop and optimize
+        loss = reconst_loss + kl_div
+        self.log("train_loss", loss)
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        x = batch
+
+        # Zero grad
+        self.zero_grad()
+
+        # Forward pass
+        mu, sig, _, x_reconst = self(x)
+
+        # Compute losses
+        kl_div = - 0.5 * torch.sum(1 + sig - mu.pow(2) - sig.exp())
+        reconst_loss = self.compute_reconstruction_loss(x, x_reconst)
+
+        # Backprop and optimize
+        loss = reconst_loss + (self.w_kl * kl_div)
+        self.log("val_loss", loss)
+        return loss
+
+    def on_train_end(self) -> None:
+        # do something when training ends
+        epoch = self.current_epoch
+
+        if self.input_rep == "pianoroll":
+            if epoch < 150 and epoch > 0:
+                if epoch % 10 == 0:
+                    self.w_kl += 1e-5
+            else:
+                if epoch % 10 == 0:
+                    self.w_kl += 1e-4
+        elif self.input_rep in ["midilike", "signallike"]:
+            if epoch % 10 == 0 and epoch > 0:
+                self.w_kl += 1e-8
+        elif self.input_rep == "midimono":
+            if epoch % 10 == 0 and epoch > 0:
+                self.w_kl += 1e-4
+        elif self.input_rep == "notetuple":
+            if epoch % 10 == 0 and epoch > 0:
+                self.w_kl += 1e-6
+
+        return super().on_train_end()
+
+    def configure_optimizers(self):
+        return torch.optim.Adam(self.parameters(), lr=1e-4)

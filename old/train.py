@@ -34,8 +34,8 @@ import os
 
 os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
 
-import models as m
-import representations as rep_classes
+import signallike-embedding.models as m
+import signallike-embedding.representations as rep_classes
 import torch  # type: ignore
 from docopt import docopt
 from tensorboardX import SummaryWriter  # type: ignore
@@ -71,8 +71,8 @@ if __name__ == '__main__':
     print(arguments)
     if torch.cuda.is_available() and not arguments['--gpu']:
         print("WARNING: You have a CUDA device, so you should probably run with --gpu")
-    # type: ignore
-    if torch.backends.mps.is_available() and not arguments['--mps']:
+
+    if torch.backends.mps.is_available() and not arguments['--mps']:  # type: ignore
         print("WARNING: You have a MPS device, so you should probably run with --mps")
 
     device = 'cpu'

@@ -373,9 +373,12 @@ class LightningVAE(L.LightningModule):
         reconst_loss = self.compute_reconstruction_loss(x, x_reconst)
 
         # Backprop and optimize
-        loss = reconst_loss + kl_div
-        self.log("train_loss", loss)
-        return loss
+        loss = reconst_loss + (self.w_kl * kl_div)
+        self.log("train_loss", loss, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log("train_kl_div", kl_div, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log("train_reconst_loss", reconst_loss, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+
+        return {"loss": loss, "kl_div": kl_div, "reconst_loss": reconst_loss}
 
     def validation_step(self, batch, batch_idx):
         x = batch
@@ -391,32 +394,33 @@ class LightningVAE(L.LightningModule):
         reconst_loss = self.compute_reconstruction_loss(x, x_reconst)
 
         # Backprop and optimize
-        loss = reconst_loss + (self.w_kl * kl_div)
-        self.log("val_loss", loss)
-        return loss
+        loss = reconst_loss + kl_div
+        self.log("val_loss", loss, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log("val_kl_div", kl_div, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log("val_reconst_loss", reconst_loss, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
 
-    def on_train_end(self) -> None:
-        # do something when training ends
+        return {"loss": loss, "kl_div": kl_div, "reconst_loss": reconst_loss}
+
+    def on_train_epoch_end(self) -> None:
+        """
+        Called when the epoch ends.
+        """
         epoch = self.current_epoch
 
-        if self.input_rep == "pianoroll":
-            if epoch < 150 and epoch > 0:
-                if epoch % 10 == 0:
-                    self.w_kl += 1e-5
-            else:
-                if epoch % 10 == 0:
-                    self.w_kl += 1e-4
-        elif self.input_rep in ["midilike", "signallike"]:
-            if epoch % 10 == 0 and epoch > 0:
-                self.w_kl += 1e-8
-        elif self.input_rep == "midimono":
-            if epoch % 10 == 0 and epoch > 0:
+        if self.input_rep in ["pianoroll"]:
+            if epoch < 150 and epoch > 0 and epoch % 10 == 0:
+                self.w_kl += 1e-5
+            elif epoch > 150 and epoch % 10 == 0:
                 self.w_kl += 1e-4
-        elif self.input_rep == "notetuple":
-            if epoch % 10 == 0 and epoch > 0:
-                self.w_kl += 1e-6
+        elif self.input_rep in ["midilike", "signallike", "dft128"] and epoch % 10 == 0 and epoch > 0:
+            self.w_kl += 1e-8
+        elif self.input_rep == "midimono" and epoch % 10 == 0 and epoch > 0:
+            self.w_kl += 1e-4
+        elif self.input_rep == "notetuple" and epoch % 10 == 0 and epoch > 0:
+            self.w_kl += 1e-6
 
-        return super().on_train_end()
+        self.log("w_kl", self.w_kl, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+        return super().on_train_epoch_end()
 
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=1e-4)

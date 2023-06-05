@@ -64,30 +64,30 @@ if __name__ == '__main__':
 
     # load the dataset
     if arguments['--inputrep'] == "pianoroll":
-        dataset = rep_classes.Pianoroll(train_path, nbframe_per_bar=nb_frame)
+        # dataset = rep_classes.Pianoroll(train_path, nbframe_per_bar=nb_frame)
         testset = rep_classes.Pianoroll(test_path, nbframe_per_bar=nb_frame)
         input_dim = 128
         seq_length = nb_frame
     elif arguments['--inputrep'] == "midilike":
-        dataset = rep_classes.Midilike(train_path)
+        # dataset = rep_classes.Midilike(train_path)
         testset = rep_classes.Midilike(test_path)
         input_dim = 1
     elif arguments['--inputrep'] == "midimono":
-        dataset = rep_classes.Midimono(train_path)
+        # dataset = rep_classes.Midimono(train_path)
         testset = rep_classes.Midimono(test_path)
         input_dim = 1
     elif arguments['--inputrep'] == "signallike":
-        dataset = rep_classes.Signallike(
-            train_path, nbframe_per_bar=nb_frame*2, mono=True)
+        # dataset = rep_classes.Signallike(
+        #     train_path, nbframe_per_bar=nb_frame*2, mono=True)
         testset = rep_classes.Signallike(
             test_path, nbframe_per_bar=nb_frame*2, mono=True)
-        input_dim = dataset.signal_size//64
+        input_dim = testset.signal_size//64
     elif arguments['--inputrep'] == "notetuple":
-        dataset = rep_classes.Notetuple(train_path)
+        # dataset = rep_classes.Notetuple(train_path)
         testset = rep_classes.Notetuple(test_path)
         input_dim = 5
     elif arguments['--inputrep'] == "dft128":
-        dataset = rep_classes.DFT128(train_path, nbframe_per_bar=nb_frame)
+        # dataset = rep_classes.DFT128(train_path, nbframe_per_bar=nb_frame)
         testset = rep_classes.DFT128(test_path, nbframe_per_bar=nb_frame)
         input_dim = 130
         seq_length = nb_frame
@@ -96,8 +96,8 @@ if __name__ == '__main__':
             "Representation {} not implemented".format(arguments['--inputrep']))
 
     # Init the dataloader
-    data_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, num_workers=4,  # type: ignore
-                                              pin_memory=True, shuffle=True, drop_last=True)
+    # data_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, num_workers=4,  # type: ignore
+    #                                           pin_memory=True, shuffle=True, drop_last=True)
     test_loader = torch.utils.data.DataLoader(testset, batch_size=batch_size, num_workers=4,  # type: ignore
                                               pin_memory=True, shuffle=False, drop_last=True)
 
@@ -114,14 +114,14 @@ if __name__ == '__main__':
     if arguments['--inputrep'] in ['pianoroll', 'signallike', 'dft128']:
         output_dim = input_dim
     elif arguments['--inputrep'] == "midilike":
-        output_dim = len(dataset.vocabulary)  # type: ignore
+        output_dim = len(testset.vocabulary)  # type: ignore
         seq_length = 64
     elif arguments['--inputrep'] == "midimono":
         output_dim = 130
         seq_length = 16
     elif arguments['--inputrep'] == "notetuple":
         output_dim = sum([len(v) for v in
-                          dataset.vocabs]) + 129  # type: ignore
+                          testset.vocabs]) + 129  # type: ignore
         seq_length = 32
 
     device = 'cpu'
@@ -143,32 +143,10 @@ if __name__ == '__main__':
     else:
         model = m.LightningVAE(encoder, decoder, arguments['--inputrep'])
 
-    os.makedirs(f'{output_dr}/{arguments["--runname"]}/models', exist_ok=True)
+    # Load the model
+    trainer = L.Trainer(default_root_dir=output_dr,)
 
-    callbacks = [
-        L.pytorch.callbacks.ModelCheckpoint(monitor='val_loss',  # type: ignore
-                                            save_top_k=1, mode='min',
-                                            dirpath=f'{output_dr}/{arguments["--runname"]}/models/',
-                                            filename=arguments['--runname'] + \
-                                            '-{epoch}-{val_loss:.2f}',
-                                            save_last=True),
-        L.pytorch.callbacks.EarlyStopping(monitor='val_loss',  # type: ignore
-                                          patience=5,
-                                          mode='min'),
-        L.pytorch.callbacks.LearningRateMonitor(  # type: ignore
-            logging_interval='step'),
-    ]
+    last_model = f'{output_dr}/models/{arguments["--runname"]}/last.ckpt'
+    trainer.test(model, dataloaders=test_loader, ckpt_path=last_model)
 
-    trainer = L.Trainer(max_epochs=10, default_root_dir=f'{output_dr}/{arguments["--runname"]}/',
-                        enable_checkpointing=True, callbacks=callbacks)
 
-    last_model = f'{output_dr}/{arguments["--runname"]}/models/last.ckpt'
-    if os.path.exists(last_model):
-        trainer.fit(model,
-                    train_dataloaders=data_loader,
-                    val_dataloaders=test_loader,
-                    ckpt_path=last_model)
-    else:
-        trainer.fit(model,
-                    train_dataloaders=data_loader,
-                    val_dataloaders=test_loader)

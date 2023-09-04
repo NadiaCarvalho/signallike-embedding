@@ -6,43 +6,43 @@ Created on Wed May 24 10:12:43 2023
 @author: carvalho
 
 Usage:
-    train.py [-h | --help]
-    train.py [--version]
-    train.py [--mps] [--gpu] [--gpudev GPUDEVICE] [--lr LR] [--maxiter MITER]
-            [--runname RNAME] [--inputrep REP] [--path P] [--bsize BSIZE]
-            [--nbframe NBFRAME] [--o OUT] [--save]
+    test.py [-h | --help]
+    test.py [--version]
+    test.py [--inputrep REP] [--gpu] [--mps] [--path MP] [--dpath DP] [--o OUT] [--nbframe NBFRAME]
+            [--start START] [--end END] [--nbpoints POINTS] [--name NAME] [--runname NAME]
 
 Options:
     -h --help  Show this helper
     --version  Show version and exit
-    --mps  Use MPS or not [default: False]
-    --gpu  Use GPU or not [default: False]
-    --gpudev GPUDEVICE  Which GPU will be use [default: 0]
-    --lr LR  Initial learning rate [default: 1e-4]
-    --maxiter MITER  Maximum number of updates [default: 50]
-    --runname RNAME  Set the name of the run for tensorboard [default: default_run]
-    --inputrep REP  Set the representation which will be used as input [default: midilike]
-    --path P  The path of the MIDI files folder (with a test and train folder) \
-            [default: /fast-1/mathieu/datasets/Chorales_Bach_Proper_with_all_transposition].
-    --bsize BSIZE  Batch size [default: 16]
-    --nbframe NBFRAME  Number of frames per bar [default: 16]
+    --gpu  Use GPU
+    --mps  Use MPS
+    --inputrep REP  Set the representation which will be used as input [default: signallike]
+    --path MP  The path of the trained model [default: None]
+    --dpath DP  The path of the MIDI files folder [default: None]
     --o OUT  Path of the output directory [default: None]
-    --save  Save the models during the training or not [default: True]
+    --nbframe NBFRAME  Number of frames per bar [default: 16]
+    --start START  Path of the starting bar [default: None]
+    --end END  Path of the ending bar [default: None]
+    --nbpoints POINTS  Number of points in the interpolation [default: 24]
+    --name NAME  Name of the final MIDI files [default: None]
+    --runname NAME  Name of the run [default: None]
 """
 
 import os
+import random
 import time
 
 import lightning as L
 import models as m
+import numpy as np
+import pypianoroll
 import representations as rep_classes
 import torch
-
 from docopt import docopt
-from tqdm import tqdm
+import matplotlib.pyplot as plt
+
 
 os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
-
 
 if __name__ == '__main__':
 
@@ -55,7 +55,7 @@ if __name__ == '__main__':
     # Parameters
     train_path = arguments['--path'] + '/train'
     test_path = arguments['--path'] + '/test'
-    batch_size = int(arguments['--bsize'])
+    # batch_size = int(arguments['--bsize'])
     nb_frame = int(arguments['--nbframe'])
     if arguments['--o'] == 'None':
         output_dr = os.getcwd() + '/output'
@@ -95,12 +95,6 @@ if __name__ == '__main__':
         raise NotImplementedError(
             "Representation {} not implemented".format(arguments['--inputrep']))
 
-    # Init the dataloader
-    # data_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, num_workers=4,  # type: ignore
-    #                                           pin_memory=True, shuffle=True, drop_last=True)
-    test_loader = torch.utils.data.DataLoader(testset, batch_size=batch_size, num_workers=4,  # type: ignore
-                                              pin_memory=True, shuffle=False, drop_last=True)
-
     # Model parameters
     enc_hidden_size = 1024
     cond_hidden_size = 1024
@@ -139,14 +133,81 @@ if __name__ == '__main__':
 
     if arguments['--inputrep'] == "notetuple":
         model = m.LightningVAE(encoder, decoder, arguments['--inputrep'],
-                               vocab=dataset.vocabs)  # type: ignore
+                               vocab=testset.vocabs)  # type: ignore
     else:
         model = m.LightningVAE(encoder, decoder, arguments['--inputrep'])
 
     # Load the model
-    trainer = L.Trainer(default_root_dir=output_dr,)
+    accel = 'cpu'
+    if arguments['--gpu']:
+        accel = 'cuda'
+    elif arguments['--mps']:
+        accel = 'mps'
 
-    last_model = f'{output_dr}/models/{arguments["--runname"]}/last.ckpt'
-    trainer.test(model, dataloaders=test_loader, ckpt_path=last_model)
+    last_model = f'{output_dr}/{arguments["--runname"]}/models/last.ckpt'
+    last_checkpoint = torch.load(
+        last_model, map_location=lambda storage, loc: storage)
+    model.load_state_dict(last_checkpoint["state_dict"])
 
+    model.eval()
 
+    testset.barfiles.sort()
+
+    # For interpolations
+    start_point = random.randint(0, len(testset))
+    starting_point = testset[start_point]
+
+    print("Starting point: ", start_point)
+
+    end_point = random.randint(0, len(testset))
+    ending_point = testset[end_point]
+
+    latents = model.interpolate_from_points(starting_point, ending_point, 24)
+
+    # Generate all the bars and concatenate them
+    for i, latent in enumerate(latents):
+        generated_bar = model.generate(latent)
+
+        # clean the bar
+        if arguments['--inputrep'] == 'signallike':
+            pr_rec = testset.back_to_pianoroll(
+                generated_bar.squeeze(0).flatten().detach().numpy())
+            pr_rec[pr_rec <= 0.25] = 0
+            pr_rec[pr_rec > 0.25] = 64
+            y = pr_rec[:, ::2]
+            for j in [0, 4, 8, 12]:
+                y[:, j] = y[:, j+1]
+            generated_bar = y.transpose(1, 0)
+        if arguments['--inputrep'] == 'dft128':
+            pr_rec = testset.back_to_pianoroll(
+                generated_bar.squeeze(0).detach())
+
+            #pr_rec[pr_rec < 0.8] = 0
+            #pr_rec[pr_rec >= 0.8] = 1
+
+            print(pr_rec)
+            generated_bar = pr_rec
+
+        else:
+            generated_bar[generated_bar < 0.8] = 0
+            generated_bar[generated_bar >= 0.8] = 64
+            generated_bar = generated_bar.squeeze(0).detach().numpy()
+
+        if i == 0:
+            progression = generated_bar
+        else :
+            try:
+                if not (progression[-16:,:] == generated_bar).all():
+                    progression = np.concatenate((progression, generated_bar), axis=0)
+            except:
+                if all(all(x == generated_bar[i]) for i, x in enumerate(progression[-16:,:])):
+                    progression = np.concatenate((progression, generated_bar), axis=0)
+
+    # Use pypianoroll to export it in MIDI format
+    track = pypianoroll.BinaryTrack(pianoroll=progression, program=0,
+                              is_drum=False, name='Generated_interpolation')
+
+    multtrack = pypianoroll.Multitrack(tracks=[track])
+    #, tempo=np.asarray([90.0])) #, resolution=4, downbeat=[0, 16, 32, 48], name="Generated_interpolation")
+    pypianoroll.write(
+        path=f"output/generations/example_{arguments['--inputrep']}_{2}.mid", multitrack=multtrack)

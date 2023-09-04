@@ -12,6 +12,7 @@ import os
 from abc import ABC, abstractmethod
 from bisect import bisect_left
 from operator import attrgetter
+import itertools
 
 import _pickle as cPickle
 import librosa
@@ -162,7 +163,7 @@ class Pianoroll(Representation):
     def sliced_and_save_pianoroll(self, pianoroll, downbeats, fs, num_bar):
 
         for i in range(len(downbeats)-1):
-            sp = pianoroll[:, int(round(downbeats[i]*fs))                           :int(round(downbeats[i+1]*fs))-1]
+            sp = pianoroll[:, int(round(downbeats[i]*fs)):int(round(downbeats[i+1]*fs))-1]
             if sp.shape[1] > 256:
                 sp = sp[:, 0:256]
             elif sp.shape[1] < 256 and sp.shape[1] > 0:
@@ -825,11 +826,20 @@ def dft_reduction(data, normalize=False, return_complex=False, only_dft=False):
     return real_dft, energy, mag
 
 
+def dft_inversion(data, denormalize=False):
+    """GET Original"""
+    in_dft = np.array([complex(real, data[1::2][i])
+                      for i, real in enumerate(data[::2])], dtype='complex_')
+    if denormalize:
+        print(f'{"energy"}:{"mag"}')
+    return np.asarray([f.real for f in np.fft.ifft(in_dft)], dtype='float32')
+
+
 class DFT128(Representation):
     def __init__(self, root_dir, nbframe_per_bar=16, mono=False, export=False, use_symmetry=True):
         super().__init__(root_dir, nbframe_per_bar=nbframe_per_bar, mono=mono, export=export)
 
-        self.prbar_path = root_dir + "/DFT128_bar" + str(self.nbframe_per_bar)
+        self.prbar_path = root_dir + "/DFT128_bar_" + str(self.nbframe_per_bar)
         self.use_symmetry = use_symmetry
 
         if not os.path.exists(self.prbar_path):
@@ -858,7 +868,20 @@ class DFT128(Representation):
         """
         Inverse the process : get a piano-roll from a DFT128 representation V.
         """
-        return None
+        V = V.numpy()
+
+        if self.use_symmetry:
+            def re_symmetrize(x):
+                sym_tp = [(a[0], -1.0*a[1])
+                          for a in list(reversed(list(zip(x[::2], x[1::2]))[1:-1]))]
+                sym_ar = list(itertools.chain.from_iterable(sym_tp))
+                return np.concatenate((x, sym_ar))
+
+            V = np.asarray([re_symmetrize(b) for b in list(V)])
+
+        idft = np.apply_along_axis(
+            dft_inversion, 1, V)
+        return np.asarray(idft, dtype='float32')
 
     def per_bar_export(self):
         """
@@ -870,12 +893,15 @@ class DFT128(Representation):
         """
         PR = Pianoroll(
             self.rootdir, nbframe_per_bar=self.nbframe_per_bar, mono=self.mono)
+
         for i in range(len(PR)):
             dft_results = np.apply_along_axis(
                 dft_reduction, 1, PR[i].numpy(), only_dft=True)
+
             if self.use_symmetry:
                 dft_results = torch.Tensor(dft_results[:, :65*2])
             else:
                 dft_results = torch.Tensor(dft_results)
+
             with bz2.BZ2File(f"{self.prbar_path}/DFT128bar_{str(i)}.pbz2", "w") as filepath:
                 cPickle.dump(dft_results, filepath)

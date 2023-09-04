@@ -7,9 +7,10 @@ Created on Tue Aug 25 13:41:24 2020
 """
 
 import random
-from typing import Any
+from typing import Any, Dict, Optional
 
 import lightning as L
+import numpy as np
 import torch  # type: ignore
 from lightning.pytorch.utilities.types import STEP_OUTPUT
 from torch import nn  # type: ignore
@@ -268,12 +269,12 @@ class LightningVAE(L.LightningModule):
                 'Vocab must be provided for notetuple input representation')
 
         # Layers
-        self.hidden_to_mu = nn.Linear(
+        self.hidden_to_mu = torch.nn.Linear(
             2 * encoder.hidden_size, encoder.latent_size)
-        self.hidden_to_sig = nn.Linear(
+        self.hidden_to_sig = torch.nn.Linear(
             2 * encoder.hidden_size, encoder.latent_size)
 
-        if input_representation in ['pianoroll', 'signallike']:
+        if input_representation in ['pianoroll', 'signallike', 'dft128']:
             self.loss_fn = torch.nn.MSELoss(reduction='sum')
         else:
             self.loss_fn = torch.nn.CrossEntropyLoss(reduction='sum')
@@ -354,12 +355,18 @@ class LightningVAE(L.LightningModule):
                 0, 2, 1), x.squeeze(2).long())
         elif self.input_rep == "notetuple":
             reconst_loss = self.notetuple_reconstruction_loss(x_reconst, x)
-        else:  # pianoroll, signallike
+        else:  # pianoroll, signallike, dft128
             reconst_loss = self.loss_fn(x_reconst, x)
 
         return reconst_loss
 
+    def compute_reconstructions_accuracy(self, reconst_loss, threshold=0.5):
+        """ Compute the reconstruction accuracy for a given input and its reconstruction """
+        accuracy = (reconst_loss < threshold).float().mean().item() # Calculate accuracy
+        return accuracy * 100.0  # Convert to percentage
+
     def training_step(self, batch, batch_idx):
+
         x = batch
 
         # Zero grad
@@ -374,9 +381,12 @@ class LightningVAE(L.LightningModule):
 
         # Backprop and optimize
         loss = reconst_loss + (self.w_kl * kl_div)
-        self.log("train_loss", loss, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
-        self.log("train_kl_div", kl_div, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
-        self.log("train_reconst_loss", reconst_loss, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log("train_loss", loss, on_step=True,
+                 on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log("train_kl_div", kl_div, on_step=True,
+                 on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log("train_reconst_loss", reconst_loss, on_step=True,
+                 on_epoch=True, prog_bar=True, sync_dist=True)
 
         return {"loss": loss, "kl_div": kl_div, "reconst_loss": reconst_loss}
 
@@ -395,18 +405,40 @@ class LightningVAE(L.LightningModule):
 
         # Backprop and optimize
         loss = reconst_loss + kl_div
-        self.log("val_loss", loss, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
-        self.log("val_kl_div", kl_div, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
-        self.log("val_reconst_loss", reconst_loss, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log("val_loss", loss, on_step=True,
+                 on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log("val_kl_div", kl_div, on_step=True,
+                 on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log("val_reconst_loss", reconst_loss, on_step=True,
+                 on_epoch=True, prog_bar=True, sync_dist=True)
 
         return {"loss": loss, "kl_div": kl_div, "reconst_loss": reconst_loss}
 
-    def on_train_epoch_end(self) -> None:
-        """
-        Called when the epoch ends.
-        """
-        epoch = self.current_epoch
+    def generate(self, latent):
+        # Create dumb target
+        input_shape = (1, self.decoder.seq_length, self.decoder.input_size)
+        db_trg = torch.zeros(input_shape)
+        # Forward pass in the decoder
+        return self.decoder(latent.unsqueeze(0), db_trg, batch_size=1,
+                            device=self.device, teacher_forcing=False)
 
+    def interpolate_from_points(self, starting_point, ending_point, nb_points=10):
+        # Get the corresponging latent code
+        _, _, st_latent, _ = self(starting_point.unsqueeze(0))
+        _, _, end_latent, _ = self(ending_point.unsqueeze(0))
+        st_latent = st_latent.squeeze(0).detach().numpy()
+        end_latent = end_latent.squeeze(0).detach().numpy()
+        # Interpolate between this two coordinates
+        return torch.tensor(np.linspace(st_latent, end_latent, nb_points))
+
+    def on_test_batch_end(self, outputs: STEP_OUTPUT | None, batch: Any, batch_idx: int, dataloader_idx: int = 0) -> None:
+        """Called when the test batch ends."""
+        return super().on_test_batch_end(outputs, batch, batch_idx, dataloader_idx)
+
+    def increase_w_kl(self, epoch) -> None:
+        """
+        Increase the weight of the KL divergence loss
+        """
         if self.input_rep in ["pianoroll"]:
             if epoch < 150 and epoch > 0 and epoch % 10 == 0:
                 self.w_kl += 1e-5
@@ -419,7 +451,22 @@ class LightningVAE(L.LightningModule):
         elif self.input_rep == "notetuple" and epoch % 10 == 0 and epoch > 0:
             self.w_kl += 1e-6
 
-        self.log("w_kl", self.w_kl, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+    def on_load_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
+        """On load checkpoint callback"""
+        super().on_load_checkpoint(checkpoint)
+
+        for i in range(checkpoint['epoch']):
+            self.increase_w_kl(i)
+
+        print('Starting with w_kl', self.w_kl)
+
+    def on_train_epoch_end(self) -> None:
+        """
+        Called when the epoch ends.
+        """
+        self.increase_w_kl(self.current_epoch)
+        self.log("w_kl", self.w_kl, on_step=False,
+                 on_epoch=True, prog_bar=True, sync_dist=True)
         return super().on_train_epoch_end()
 
     def configure_optimizers(self):

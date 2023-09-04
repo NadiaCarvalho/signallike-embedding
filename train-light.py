@@ -8,7 +8,7 @@ Created on Wed May 24 10:12:43 2023
 Usage:
     train.py [-h | --help]
     train.py [--version]
-    train.py [--mps] [--gpu] [--gpudev GPUDEVICE] [--lr LR] [--maxiter MITER]
+    train.py [--mps] [--gpu] [--gpudev GPUDEVICE] [--lr LR] [--epochs MITER]
             [--runname RNAME] [--inputrep REP] [--path P] [--bsize BSIZE]
             [--nbframe NBFRAME] [--o OUT] [--save]
 
@@ -19,7 +19,7 @@ Options:
     --gpu  Use GPU or not [default: False]
     --gpudev GPUDEVICE  Which GPU will be use [default: 0]
     --lr LR  Initial learning rate [default: 1e-4]
-    --maxiter MITER  Maximum number of updates [default: 50]
+    --epochs MITER  Maximum number of updates [default: 50]
     --runname RNAME  Set the name of the run for tensorboard [default: default_run]
     --inputrep REP  Set the representation which will be used as input [default: midilike]
     --path P  The path of the MIDI files folder (with a test and train folder) \
@@ -159,7 +159,7 @@ if __name__ == '__main__':
             logging_interval='step'),
     ]
 
-    trainer = L.Trainer(max_epochs=10, default_root_dir=f'{output_dr}/{arguments["--runname"]}/',
+    trainer = L.Trainer(max_epochs=int(arguments["--epochs"]), default_root_dir=f'{output_dr}/{arguments["--runname"]}/',
                         enable_checkpointing=True, callbacks=callbacks)
 
     last_model = f'{output_dr}/{arguments["--runname"]}/models/last.ckpt'
